@@ -104,7 +104,7 @@ func loginToZerto(client *http.Client, serverIP, username, password string) (str
 	return sessionToken, nil
 }
 
-// queryVPGs queries the VPGs and prints the average Actual RPO
+// queryVPGs queries the VPGs and returns the average Actual RPO as an integer
 func queryVPGs(client *http.Client, serverIP, sessionToken string) error {
 	apiURL := fmt.Sprintf("https://%s:9669/v1/vpgs", serverIP)
 	req, _ := http.NewRequest("GET", apiURL, nil)
@@ -128,7 +128,7 @@ func queryVPGs(client *http.Client, serverIP, sessionToken string) error {
 		return fmt.Errorf("error unmarshalling JSON: %v", err)
 	}
 
-	// Calculate and print the average RPO
+	// Calculate the average RPO
 	totalRPO := 0
 	for _, vpg := range vpgs {
 		totalRPO += vpg.ActualRPO
@@ -136,10 +136,10 @@ func queryVPGs(client *http.Client, serverIP, sessionToken string) error {
 
 	if len(vpgs) > 0 {
 		averageRPO := totalRPO / len(vpgs)
-		// fmt.Printf("Average Actual RPO: %d seconds\n", averageRPO)
-		fmt.Printf("%d", averageRPO)
+		// Return only the integer value of Average RPO
+		fmt.Printf("%d\n", averageRPO)
 	} else {
-		fmt.Println("No VPGs found.")
+		fmt.Println("0")
 	}
 
 	return nil
