@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -24,9 +25,14 @@ type Config struct {
 	Password string `json:"password"`
 }
 
+const (
+	defaultServerIP = "localhost"
+	zertoAPIPort    = 9669
+	apiTimeout      = 10 * time.Second
+)
+
 func main() {
-	// Accept command-line arguments for server IP and config file path
-	serverIP := flag.String("server", "localhost", "ZVM server IP")
+	serverIP := flag.String("server", defaultServerIP, "ZVM server IP")
 	configFile := flag.String("config", "", "Path to the config file")
 	flag.Parse()
 
@@ -34,54 +40,49 @@ func main() {
 		log.Fatal("Config file path is required")
 	}
 
-	// Read config file
 	config, err := readConfig(*configFile)
 	if err != nil {
 		log.Fatalf("Error reading config file: %v", err)
 	}
 
-	// Create HTTP client with custom transport to skip TLS verification
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{
 		Jar:     jar,
-		Timeout: 10 * time.Second,
+		Timeout: apiTimeout,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // Skip certificate validation
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
 	}
 
-	// Login to Zerto API and get session token
 	sessionToken, err := loginToZerto(client, *serverIP, config.Username, config.Password)
 	if err != nil {
 		log.Fatalf("Error logging in to Zerto API: %v", err)
 	}
 
-	// Query VPGs from Zerto API using session token
-	err = queryVPGs(client, *serverIP, sessionToken)
+	averageRPO, err := queryVPGs(client, *serverIP, sessionToken)
 	if err != nil {
 		log.Fatalf("Error querying VPGs: %v", err)
 	}
+
+	fmt.Println(averageRPO)
 }
 
-// readConfig reads the config file and returns the username and password
 func readConfig(configFile string) (*Config, error) {
-	// Use os.ReadFile to read the entire config file at once
-	bytes, err := os.ReadFile(configFile)
+	data, err := os.ReadFile(configFile)
 	if err != nil {
 		return nil, err
 	}
 
 	var config Config
-	if err := json.Unmarshal(bytes, &config); err != nil {
+	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, err
 	}
 
 	return &config, nil
 }
 
-// loginToZerto handles logging into the Zerto API and returning a session token
 func loginToZerto(client *http.Client, serverIP, username, password string) (string, error) {
-	loginURL := fmt.Sprintf("https://%s:9669/v1/session/add", serverIP)
+	loginURL := fmt.Sprintf("https://%s:%d/v1/session/add", serverIP, zertoAPIPort)
 	req, _ := http.NewRequest("POST", loginURL, nil)
 	req.SetBasicAuth(username, password)
 
@@ -95,52 +96,43 @@ func loginToZerto(client *http.Client, serverIP, username, password string) (str
 		return "", fmt.Errorf("failed to login, status code: %d", resp.StatusCode)
 	}
 
-	// Extract session token from the X-Zerto-Session header
 	sessionToken := resp.Header.Get("X-Zerto-Session")
 	if sessionToken == "" {
-		return "", fmt.Errorf("session token not found in headers")
+		return "", errors.New("session token not found in headers")
 	}
 
 	return sessionToken, nil
 }
 
-// queryVPGs queries the VPGs and returns the average Actual RPO as an integer
-func queryVPGs(client *http.Client, serverIP, sessionToken string) error {
-	apiURL := fmt.Sprintf("https://%s:9669/v1/vpgs", serverIP)
+func queryVPGs(client *http.Client, serverIP, sessionToken string) (int, error) {
+	apiURL := fmt.Sprintf("https://%s:%d/v1/vpgs", serverIP, zertoAPIPort)
 	req, _ := http.NewRequest("GET", apiURL, nil)
-	// Set the session token in the X-Zerto-Session header
 	req.Header.Set("X-Zerto-Session", sessionToken)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
-	// Unmarshal the response into a slice of VPGs
 	var vpgs []VPG
 	if err := json.Unmarshal(body, &vpgs); err != nil {
-		return fmt.Errorf("error unmarshalling JSON: %v", err)
+		return 0, fmt.Errorf("error unmarshalling JSON: %v", err)
 	}
 
-	// Calculate the average RPO
+	if len(vpgs) == 0 {
+		return 0, nil
+	}
+
 	totalRPO := 0
 	for _, vpg := range vpgs {
 		totalRPO += vpg.ActualRPO
 	}
 
-	if len(vpgs) > 0 {
-		averageRPO := totalRPO / len(vpgs)
-		// Return only the integer value of Average RPO
-		fmt.Printf("%d\n", averageRPO)
-	} else {
-		fmt.Println("0")
-	}
-
-	return nil
+	return totalRPO / len(vpgs), nil
 }

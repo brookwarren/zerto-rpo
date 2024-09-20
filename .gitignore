@@ -11,3 +11,4 @@ database.json
 tmp/*
 .env
 .config/*
+.backup/*
