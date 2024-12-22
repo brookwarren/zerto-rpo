@@ -1,0 +1,171 @@
+[33mcommit 2a66df97dc252c56c52adee4fddc605c973568a5[m[33m ([m[1;36mHEAD -> [m[1;32mmaster[m[33m, [m[1;31morigin/master[m[33m)[m
+Author: Brook Warren <78274778+brookwarren@users.noreply.github.com>
+Date:   Fri Sep 20 16:41:30 2024 -0700
+
+    cleanup
+
+[1mdiff --git a/.gitignore b/.gitignore[m
+[1mindex 3b790e4..1998be9 100644[m
+[1m--- a/.gitignore[m
+[1m+++ b/.gitignore[m
+[36m@@ -11,3 +11,4 @@[m [mdatabase.json[m
+ tmp/*[m
+ .env[m
+ .config/*[m
+[32m+[m[32m.backup/*[m
+[1mdiff --git a/main.go b/main.go[m
+[1mindex ca01bef..a9634fe 100644[m
+[1m--- a/main.go[m
+[1m+++ b/main.go[m
+[36m@@ -3,6 +3,7 @@[m [mpackage main[m
+ import ([m
+ 	"crypto/tls"[m
+ 	"encoding/json"[m
+[32m+[m	[32m"errors"[m
+ 	"flag"[m
+ 	"fmt"[m
+ 	"io"[m
+[36m@@ -24,9 +25,14 @@[m [mtype Config struct {[m
+ 	Password string `json:"password"`[m
+ }[m
+ [m
+[32m+[m[32mconst ([m
+[32m+[m	[32mdefaultServerIP = "localhost"[m
+[32m+[m	[32mzertoAPIPort    = 9669[m
+[32m+[m	[32mapiTimeout      = 10 * time.Second[m
+[32m+[m[32m)[m
+[32m+[m
+ func main() {[m
+[31m-	// Accept command-line arguments for server IP and config file path[m
+[31m-	serverIP := flag.String("server", "localhost", "ZVM server IP")[m
+[32m+[m	[32mserverIP := flag.String("server", defaultServerIP, "ZVM server IP")[m
+ 	configFile := flag.String("config", "", "Path to the config file")[m
+ 	flag.Parse()[m
+ [m
+[36m@@ -34,54 +40,49 @@[m [mfunc main() {[m
+ 		log.Fatal("Config file path is required")[m
+ 	}[m
+ [m
+[31m-	// Read config file[m
+ 	config, err := readConfig(*configFile)[m
+ 	if err != nil {[m
+ 		log.Fatalf("Error reading config file: %v", err)[m
+ 	}[m
+ [m
+[31m-	// Create HTTP client with custom transport to skip TLS verification[m
+ 	jar, _ := cookiejar.New(nil)[m
+ 	client := &http.Client{[m
+ 		Jar:     jar,[m
+[31m-		Timeout: 10 * time.Second,[m
+[32m+[m		[32mTimeout: apiTimeout,[m
+ 		Transport: &http.Transport{[m
+[31m-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // Skip certificate validation[m
+[32m+[m			[32mTLSClientConfig: &tls.Config{InsecureSkipVerify: true},[m
+ 		},[m
+ 	}[m
+ [m
+[31m-	// Login to Zerto API and get session token[m
+ 	sessionToken, err := loginToZerto(client, *serverIP, config.Username, config.Password)[m
+ 	if err != nil {[m
+ 		log.Fatalf("Error logging in to Zerto API: %v", err)[m
+ 	}[m
+ [m
+[31m-	// Query VPGs from Zerto API using session token[m
+[31m-	err = queryVPGs(client, *serverIP, sessionToken)[m
+[32m+[m	[32maverageRPO, err := queryVPGs(client, *serverIP, sessionToken)[m
+ 	if err != nil {[m
+ 		log.Fatalf("Error querying VPGs: %v", err)[m
+ 	}[m
+[32m+[m
+[32m+[m	[32mfmt.Println(averageRPO)[m
+ }[m
+ [m
+[31m-// readConfig reads the config file and returns the username and password[m
+ func readConfig(configFile string) (*Config, error) {[m
+[31m-	// Use os.ReadFile to read the entire config file at once[m
+[31m-	bytes, err := os.ReadFile(configFile)[m
+[32m+[m	[32mdata, err := os.ReadFile(configFile)[m
+ 	if err != nil {[m
+ 		return nil, err[m
+ 	}[m
+ [m
+ 	var config Config[m
+[31m-	if err := json.Unmarshal(bytes, &config); err != nil {[m
+[32m+[m	[32mif err := json.Unmarshal(data, &config); err != nil {[m
+ 		return nil, err[m
+ 	}[m
+ [m
+ 	return &config, nil[m
+ }[m
+ [m
+[31m-// loginToZerto handles logging into the Zerto API and returning a session token[m
+ func loginToZerto(client *http.Client, serverIP, username, password string) (string, error) {[m
+[31m-	loginURL := fmt.Sprintf("https://%s:9669/v1/session/add", serverIP)[m
+[32m+[m	[32mloginURL := fmt.Sprintf("https://%s:%d/v1/session/add", serverIP, zertoAPIPort)[m
+ 	req, _ := http.NewRequest("POST", loginURL, nil)[m
+ 	req.SetBasicAuth(username, password)[m
+ [m
+[36m@@ -95,52 +96,43 @@[m [mfunc loginToZerto(client *http.Client, serverIP, username, password string) (str[m
+ 		return "", fmt.Errorf("failed to login, status code: %d", resp.StatusCode)[m
+ 	}[m
+ [m
+[31m-	// Extract session token from the X-Zerto-Session header[m
+ 	sessionToken := resp.Header.Get("X-Zerto-Session")[m
+ 	if sessionToken == "" {[m
+[31m-		return "", fmt.Errorf("session token not found in headers")[m
+[32m+[m		[32mreturn "", errors.New("session token not found in headers")[m
+ 	}[m
+ [m
+ 	return sessionToken, nil[m
+ }[m
+ [m
+[31m-// queryVPGs queries the VPGs and returns the average Actual RPO as an integer[m
+[31m-func queryVPGs(client *http.Client, serverIP, sessionToken string) error {[m
+[31m-	apiURL := fmt.Sprintf("https://%s:9669/v1/vpgs", serverIP)[m
+[32m+[m[32mfunc queryVPGs(client *http.Client, serverIP, sessionToken string) (int, error) {[m
+[32m+[m	[32mapiURL := fmt.Sprintf("https://%s:%d/v1/vpgs", serverIP, zertoAPIPort)[m
+ 	req, _ := http.NewRequest("GET", apiURL, nil)[m
+[31m-	// Set the session token in the X-Zerto-Session header[m
+ 	req.Header.Set("X-Zerto-Session", sessionToken)[m
+ [m
+ 	resp, err := client.Do(req)[m
+ 	if err != nil {[m
+[31m-		return err[m
+[32m+[m		[32mreturn 0, err[m
+ 	}[m
+ 	defer resp.Body.Close()[m
+ [m
+ 	body, err := io.ReadAll(resp.Body)[m
+ 	if err != nil {[m
+[31m-		return err[m
+[32m+[m		[32mreturn 0, err[m
+ 	}[m
+ [m
+[31m-	// Unmarshal the response into a slice of VPGs[m
+ 	var vpgs []VPG[m
+ 	if err := json.Unmarshal(body, &vpgs); err != nil {[m
+[31m-		return fmt.Errorf("error unmarshalling JSON: %v", err)[m
+[32m+[m		[32mreturn 0, fmt.Errorf("error unmarshalling JSON: %v", err)[m
+[32m+[m	[32m}[m
+[32m+[m
+[32m+[m	[32mif len(vpgs) == 0 {[m
+[32m+[m		[32mreturn 0, nil[m
+ 	}[m
+ [m
+[31m-	// Calculate the average RPO[m
+ 	totalRPO := 0[m
+ 	for _, vpg := range vpgs {[m
+ 		totalRPO += vpg.ActualRPO[m
+ 	}[m
+ [m
+[31m-	if len(vpgs) > 0 {[m
+[31m-		averageRPO := totalRPO / len(vpgs)[m
+[31m-		// Return only the integer value of Average RPO[m
+[31m-		fmt.Printf("%d\n", averageRPO)[m
+[31m-	} else {[m
+[31m-		fmt.Println("0")[m
+[31m-	}[m
+[31m-[m
+[31m-	return nil[m
+[32m+[m	[32mreturn totalRPO / len(vpgs), nil[m
+ }[m
