@@ -118,7 +118,7 @@ func loginToZerto(client *http.Client, serverIP, username, password string) (str
 
 // queryVPGs queries the VPGs and returns the average Actual RPO as an integer
 func queryVPGs(client *http.Client, serverIP, sessionToken string) error {
-	apiURL := fmt.Sprintf("https://%s:9669/v1/vpgs", serverIP)
+	apiURL := fmt.Sprintf("https://%s/v1/vpgs", serverIP)
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
 		return fmt.Errorf("error creating request: %v", err)
