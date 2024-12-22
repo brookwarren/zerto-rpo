@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/http/cookiejar"
 	"os"
 	"time"
 )
@@ -19,15 +18,20 @@ type VPG struct {
 	ActualRPO int `json:"ActualRPO"`
 }
 
-// Config struct holds the ZVM login credentials
+// Config struct holds the Zerto API credentials
 type Config struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
 
+// TokenResponse struct represents the response from the token endpoint
+type TokenResponse struct {
+	AccessToken string `json:"access_token"`
+}
+
 func main() {
 	// Accept command-line arguments for server IP and config file path
-	serverIP := flag.String("server", "localhost", "ZVM server IP")
+	serverIP := flag.String("server", "localhost", "Zerto server IP")
 	configFile := flag.String("config", "", "Path to the config file")
 	flag.Parse()
 
@@ -42,23 +46,21 @@ func main() {
 	}
 
 	// Create HTTP client with custom transport to skip TLS verification
-	jar, _ := cookiejar.New(nil)
 	client := &http.Client{
-		Jar:     jar,
 		Timeout: 10 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // Skip certificate validation
 		},
 	}
 
-	// Login to Zerto API and get session token
-	sessionToken, err := loginToZerto(client, *serverIP, config.Username, config.Password)
+	// Authenticate with Zerto API and get access token
+	accessToken, err := authenticate(client, *serverIP, config.Username, config.Password)
 	if err != nil {
-		log.Fatalf("Error logging in to Zerto API: %v", err)
+		log.Fatalf("Error authenticating with Zerto API: %v", err)
 	}
 
-	// Query VPGs from Zerto API using session token
-	err = queryVPGs(client, *serverIP, sessionToken)
+	// Query VPGs from Zerto API using access token
+	err = queryVPGs(client, *serverIP, accessToken)
 	if err != nil {
 		log.Fatalf("Error querying VPGs: %v", err)
 	}
@@ -79,22 +81,17 @@ func readConfig(configFile string) (*Config, error) {
 	return &config, nil
 }
 
-// loginToZerto handles logging into the Zerto API and returning a session token
-func loginToZerto(client *http.Client, serverIP, username, password string) (string, error) {
-	loginURL := fmt.Sprintf("https://%s:9669/v1/session/add", serverIP)
+// authenticate handles logging into the Zerto API and returning an access token
+func authenticate(client *http.Client, serverIP, username, password string) (string, error) {
+	authURL := fmt.Sprintf("https://%s/auth/realms/zerto/protocol/openid-connect/token", serverIP)
 
-	// Explicit JSON payload for authentication
-	payload := map[string]string{"username": username, "password": password}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return "", fmt.Errorf("error creating JSON payload: %v", err)
-	}
-
-	req, err := http.NewRequest("POST", loginURL, io.NopCloser(bytes.NewReader(body)))
+	// Form data for authentication
+	data := fmt.Sprintf("grant_type=password&client_id=zerto-client&username=%s&password=%s", username, password)
+	req, err := http.NewRequest("POST", authURL, bytes.NewBufferString(data))
 	if err != nil {
 		return "", fmt.Errorf("error creating request: %v", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -104,26 +101,25 @@ func loginToZerto(client *http.Client, serverIP, username, password string) (str
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("login failed, status code: %d, response: %s", resp.StatusCode, string(bodyBytes))
+		return "", fmt.Errorf("authentication failed, status code: %d, response: %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	// Extract session token from the response
-	sessionToken := resp.Header.Get("X-Zerto-Session")
-	if sessionToken == "" {
-		return "", fmt.Errorf("session token not found in headers")
+	var tokenResponse TokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResponse); err != nil {
+		return "", fmt.Errorf("error decoding token response: %v", err)
 	}
 
-	return sessionToken, nil
+	return tokenResponse.AccessToken, nil
 }
 
 // queryVPGs queries the VPGs and returns the average Actual RPO as an integer
-func queryVPGs(client *http.Client, serverIP, sessionToken string) error {
+func queryVPGs(client *http.Client, serverIP, accessToken string) error {
 	apiURL := fmt.Sprintf("https://%s/v1/vpgs", serverIP)
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
 		return fmt.Errorf("error creating request: %v", err)
 	}
-	req.Header.Set("X-Zerto-Session", sessionToken)
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
@@ -155,9 +151,9 @@ func queryVPGs(client *http.Client, serverIP, sessionToken string) error {
 
 	if len(vpgs) > 0 {
 		averageRPO := totalRPO / len(vpgs)
-		fmt.Printf("%d\n", averageRPO)
+		fmt.Printf("Average RPO: %d seconds\n", averageRPO)
 	} else {
-		fmt.Println("0")
+		fmt.Println("No VPGs found.")
 	}
 
 	return nil
