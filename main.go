@@ -151,7 +151,7 @@ func queryVPGs(client *http.Client, serverIP, accessToken string) error {
 
 	if len(vpgs) > 0 {
 		averageRPO := totalRPO / len(vpgs)
-		fmt.Printf("Average RPO: %d seconds\n", averageRPO)
+		fmt.Println(averageRPO)
 	} else {
 		fmt.Println("No VPGs found.")
 	}
