@@ -1,16 +1,17 @@
 package main
 
 import (
-	"bytes"
-	"crypto/tls"
-	"encoding/json"
-	"flag"
-	"fmt"
-	"io"
-	"log"
-	"net/http"
-	"os"
-	"time"
+        "bytes"
+        "crypto/tls"
+        "encoding/json"
+        "flag"
+        "fmt"
+        "io"
+        "log"
+        "net/http"
+        "net/url"
+        "os"
+        "time"
 )
 
 // VPG struct represents the VPG details returned by the Zerto API
