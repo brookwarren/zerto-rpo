@@ -85,13 +85,20 @@ func readConfig(configFile string) (*Config, error) {
 func authenticate(client *http.Client, serverIP, username, password string) (string, error) {
 	authURL := fmt.Sprintf("https://%s/auth/realms/zerto/protocol/openid-connect/token", serverIP)
 
-	// Form data for authentication
-	data := fmt.Sprintf("grant_type=password&client_id=zerto-client&username=%s&password=%s", username, password)
-	req, err := http.NewRequest("POST", authURL, bytes.NewBufferString(data))
+	form := url.Values{}
+	form.Set("grant_type", "password")
+	form.Set("client_id", "zerto-client")
+	form.Set("username", username)
+	form.Set("password", password)
+	form.Set("scope", "openid")
+
+	req, err := http.NewRequest("POST", authURL, bytes.NewBufferString(form.Encode()))
 	if err != nil {
 		return "", fmt.Errorf("error creating request: %v", err)
 	}
+
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -99,19 +106,23 @@ func authenticate(client *http.Client, serverIP, username, password string) (str
 	}
 	defer resp.Body.Close()
 
+	bodyBytes, _ := io.ReadAll(resp.Body)
+
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
 		return "", fmt.Errorf("authentication failed, status code: %d, response: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	var tokenResponse TokenResponse
-	if err := json.NewDecoder(resp.Body).Decode(&tokenResponse); err != nil {
-		return "", fmt.Errorf("error decoding token response: %v", err)
+	if err := json.Unmarshal(bodyBytes, &tokenResponse); err != nil {
+		return "", fmt.Errorf("error decoding token response: %v; response: %s", err, string(bodyBytes))
+	}
+
+	if tokenResponse.AccessToken == "" {
+		return "", fmt.Errorf("authentication succeeded but access_token was empty; response: %s", string(bodyBytes))
 	}
 
 	return tokenResponse.AccessToken, nil
 }
-
 // queryVPGs queries the VPGs and returns the average Actual RPO as an integer
 func queryVPGs(client *http.Client, serverIP, accessToken string) error {
 	apiURL := fmt.Sprintf("https://%s/v1/vpgs", serverIP)
